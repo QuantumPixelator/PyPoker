@@ -228,7 +228,7 @@ def main(max_frames: int | None = None):
                 if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
                     if player_money <= 0 or pot <= 0:
                         game_over = True
-                        message = "Game over! Press Restart or Quit."
+                        message = "Game over!\nPress Restart or Quit."
                     else:
                         if len(deck) <= 3:
                             deck = make_deck()
@@ -422,8 +422,15 @@ def main(max_frames: int | None = None):
                             message = "You quit the game.\nPress Restart to play again."
                             outcome_type = 'quit'
                         elif name == 'restart' and game_over and wait_for_continue:
-                            player_money = 100
-                            pot = 50
+                            from json import load as _load_json
+                            try:
+                                with open("settings.json", "r") as f:
+                                    data = _load_json(f)
+                                    player_money = data.get("starting_money", 100)
+                                    pot = data.get("starting_pot", 50)
+                            except Exception:
+                                player_money = 100
+                                pot = 50
                             deck = make_deck()
                             current_card = deck.pop()
                             next_card = None
@@ -431,6 +438,8 @@ def main(max_frames: int | None = None):
                             game_over = False
                             bet_amount = 0
                             bet_ready = False
+                            slider_value = 1
+                            slider_dragging = False
                             animating = False
                             animation_progress = 0
                             guess = None
