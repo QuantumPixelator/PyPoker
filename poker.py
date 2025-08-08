@@ -128,7 +128,7 @@ def draw_card(card, x, y, face_up=True, border=True):
         pygame.draw.rect(screen, BLACK, rect, 3)
     key = card if face_up else 'back'
     if key not in card_images:
-        # Fallback placeholder if somehow missing
+        # Fallback placeholder if card assets are missing
         surf = pygame.Surface((80, 120))
         surf.fill((200, 200, 200))
         pygame.draw.rect(surf, BLACK, surf.get_rect(), 2)
@@ -193,9 +193,6 @@ def draw_slider(x, y, w, h, min_val, max_val, value, dragging):
     knob_rect = pygame.Rect(knob_x - 10, y + h//2 - 15, 20, 30)
     pygame.draw.rect(screen, RED if dragging else BLUE, knob_rect)
     pygame.draw.rect(screen, BLACK, knob_rect, 2)
-    # Draw value
-    val_text = small_font.render(f"${value}", True, BLACK)
-    screen.blit(val_text, (x + w//2 - val_text.get_width()//2, y + h + 5))
     return knob_rect
 
 def main(max_frames: int | None = None):
