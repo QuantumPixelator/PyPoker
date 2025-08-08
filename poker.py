@@ -3,6 +3,17 @@ import random
 import sys
 import os
 import math
+import json
+
+
+# Load settings from settings.json
+def load_settings():
+    try:
+        with open("settings.json", "r") as f:
+            data = json.load(f)
+            return data.get("starting_money", 100), data.get("starting_pot", 50)
+    except Exception:
+        return 100, 50
 
 # Initialize Pygame
 pygame.init()
@@ -157,8 +168,7 @@ def animate_card_flip(card, x, y, progress):
         screen.blit(img, (x + (80-w)//2, y))
 
 
-player_money = 100
-pot = 50
+player_money, pot = load_settings()
 deck = make_deck()
 current_card = deck.pop()
 next_card = None
@@ -270,37 +280,39 @@ def main(max_frames: int | None = None):
             else:
                 value1, _ = current_card
                 value2, _ = next_card
+                def value_str(val):
+                    return VALUE_NAMES.get(val, str(val))
                 if guess == 'higher':
                     if value2 > value1:
                         player_money += bet_amount
                         pot -= bet_amount
-                        message = f"You won ${bet_amount}! {card_name(next_card)} is higher."
+                        message = f"You win ${bet_amount}\n{value_str(value1)} < {value_str(value2)}"
                         outcome_type = 'win'
                     elif value2 == value1:
                         player_money -= bet_amount * 2
                         pot += bet_amount * 2
-                        message = f"Tie! You lose double: ${bet_amount*2}. ({card_name(next_card)})"
+                        message = f"Tie! You lose double: ${bet_amount*2}\n{value_str(value1)} = {value_str(value2)}"
                         outcome_type = 'tie'
                     else:
                         player_money -= bet_amount
                         pot += bet_amount
-                        message = f"You lost ${bet_amount}. {card_name(next_card)} is lower."
+                        message = f"You lose ${bet_amount}\n{value_str(value1)} > {value_str(value2)}"
                         outcome_type = 'lose'
                 else:
                     if value2 < value1:
                         player_money += bet_amount
                         pot -= bet_amount
-                        message = f"You won ${bet_amount}! {card_name(next_card)} is lower."
+                        message = f"You win ${bet_amount}\n{value_str(value1)} > {value_str(value2)}"
                         outcome_type = 'win'
                     elif value2 == value1:
                         player_money -= bet_amount * 2
                         pot += bet_amount * 2
-                        message = f"Tie! You lose double: ${bet_amount*2}. ({card_name(next_card)})"
+                        message = f"Tie! You lose double: ${bet_amount*2}\n{value_str(value1)} = {value_str(value2)}"
                         outcome_type = 'tie'
                     else:
                         player_money -= bet_amount
                         pot += bet_amount
-                        message = f"You lost ${bet_amount}. {card_name(next_card)} is higher."
+                        message = f"You lose ${bet_amount}\n{value_str(value1)} < {value_str(value2)}"
                         outcome_type = 'lose'
                 last_cards = (current_card, next_card)
                 animating = False
@@ -336,19 +348,23 @@ def main(max_frames: int | None = None):
         }
         inner, outline = color_map.get(outcome_type, ((255,255,255),(0,0,0)))
         max_text_width = WIDTH - 60
-        wrapped_surfaces, total_h = wrap_outlined_text(message, display_font, inner, outline, max_text_width, outline_px=3, line_spacing=8)
+        # Split message on '\n' and render each line separately
+        message_lines = message.split('\n')
         top_y = 80  # lowered to avoid overlap with money/pot display
         current_y = top_y
-        for i, surf_line in enumerate(wrapped_surfaces):
-            screen.blit(surf_line, (WIDTH//2 - surf_line.get_width()//2, current_y))
-            current_y += surf_line.get_height() + 8
+        for msg_line in message_lines:
+            wrapped_surfaces, _ = wrap_outlined_text(msg_line, display_font, inner, outline, max_text_width, outline_px=3, line_spacing=8)
+            for surf_line in wrapped_surfaces:
+                screen.blit(surf_line, (WIDTH//2 - surf_line.get_width()//2, current_y))
+                current_y += surf_line.get_height() + 8
         # Show click anywhere to continue after round
         if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
             # Create pulsing effect with time-based sine wave
             import time
             pulse = abs(math.sin(time.time() * 3)) * 0.5 + 0.5  # Pulse between 0.5 and 1.0
             glow_size = int(4 + pulse * 2)  # Outline size pulses between 4 and 6 pixels
-            glow_color = (int(255 * pulse), int(20 * pulse), int(147 * pulse))  # Hot pink glow that pulses
+            # Gold/yellow color: (255, 215, 0) pulsing
+            glow_color = (int(255 * pulse), int(215 * pulse), int(0 * pulse))
             continue_surface = render_outlined_text("Click anywhere to continue", font, WHITE, glow_color, outline_px=glow_size)
             screen.blit(continue_surface, (WIDTH//2 - continue_surface.get_width()//2, HEIGHT//2 + 80))
 
@@ -398,12 +414,12 @@ def main(max_frames: int | None = None):
                             bet_ready = False
                             slider_value = 1
                             bet_amount = 0
-                            message = "Card passed. Adjust your bet and click a button."
+                            message = "Card passed.\nAdjust your bet and click a button."
                             outcome_type = 'pass'
                         elif name == 'quit' and not animating:
                             game_over = True
                             wait_for_continue = True
-                            message = "You quit the game. Press Restart to play again."
+                            message = "You quit the game.\nPress Restart to play again."
                             outcome_type = 'quit'
                         elif name == 'restart' and game_over and wait_for_continue:
                             player_money = 100
