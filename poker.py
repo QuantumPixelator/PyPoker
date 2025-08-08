@@ -347,8 +347,13 @@ def main(max_frames: int | None = None):
             current_y += surf_line.get_height() + 8
         # Show click anywhere to continue after round
         if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
-            continue_text = small_font.render("Click anywhere to continue", True, RED)
-            screen.blit(continue_text, (WIDTH//2 - continue_text.get_width()//2, HEIGHT//2 + 20))
+            # Create pulsing effect with time-based sine wave
+            import time
+            pulse = abs(math.sin(time.time() * 3)) * 0.5 + 0.5  # Pulse between 0.5 and 1.0
+            glow_size = int(4 + pulse * 2)  # Outline size pulses between 4 and 6 pixels
+            glow_color = (int(255 * pulse), int(20 * pulse), int(147 * pulse))  # Hot pink glow that pulses
+            continue_surface = render_outlined_text("Click anywhere to continue", font, WHITE, glow_color, outline_px=glow_size)
+            screen.blit(continue_surface, (WIDTH//2 - continue_surface.get_width()//2, HEIGHT//2 + 80))
 
         # Draw buttons
         button_rects.clear()
