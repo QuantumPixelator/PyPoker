@@ -22,6 +22,45 @@ BLUE = (0, 0, 200)
 # Fonts
 font = pygame.font.SysFont(None, 48)
 small_font = pygame.font.SysFont(None, 32)
+# Fun display font (fallback to default if unavailable)
+try:
+    display_font = pygame.font.SysFont('comic sans ms', 42, bold=True)
+except Exception:
+    display_font = pygame.font.SysFont(None, 42)
+
+def render_outlined_text(text, font, inner_color, outline_color, outline_px=2):
+    base = font.render(text, True, inner_color)
+    w, h = base.get_width(), base.get_height()
+    surf = pygame.Surface((w + outline_px*2, h + outline_px*2), pygame.SRCALPHA)
+    # Draw outline by offsetting
+    for dx in range(-outline_px, outline_px+1):
+        for dy in range(-outline_px, outline_px+1):
+            if dx*dx + dy*dy <= outline_px*outline_px:
+                surf.blit(font.render(text, True, outline_color), (dx+outline_px, dy+outline_px))
+    surf.blit(base, (outline_px, outline_px))
+    return surf
+
+def wrap_outlined_text(text, font, inner_color, outline_color, max_width, outline_px=2, line_spacing=6):
+    words = text.split()
+    lines = []
+    current = []
+    while words:
+        current.append(words.pop(0))
+        test = " ".join(current)
+        test_surface = font.render(test, True, inner_color)
+        if test_surface.get_width() > max_width:
+            # remove last word and commit line
+            last = current.pop()
+            if current:
+                line_text = " ".join(current)
+                lines.append(line_text)
+            current = [last]
+    if current:
+        lines.append(" ".join(current))
+    # Render each line with outline
+    rendered = [render_outlined_text(l, font, inner_color, outline_color, outline_px) for l in lines]
+    total_height = sum(s.get_height() for s in rendered) + line_spacing * (len(rendered)-1)
+    return rendered, total_height
 
 # Card suits and values
 SUITS = ['hearts', 'diamonds', 'clubs', 'spades']
@@ -124,6 +163,7 @@ deck = make_deck()
 current_card = deck.pop()
 next_card = None
 message = "Adjust your bet and click Higher/Lower/Pass."
+outcome_type = None  # 'win','lose','tie','pass','quit', or None
 game_over = False
 bet_amount = 0
 animating = False
@@ -159,7 +199,7 @@ def draw_slider(x, y, w, h, min_val, max_val, value, dragging):
     return knob_rect
 
 def main(max_frames: int | None = None):
-    global player_money, pot, deck, current_card, next_card, message, game_over, bet_amount, animating, animation_progress, bet_ready, slider_value, slider_dragging
+    global player_money, pot, deck, current_card, next_card, message, game_over, bet_amount, animating, animation_progress, bet_ready, slider_value, slider_dragging, outcome_type
     clock = pygame.time.Clock()
     guess = None
     wait_for_continue = False
@@ -192,6 +232,7 @@ def main(max_frames: int | None = None):
                         slider_value = 1
                         message = "Adjust your bet and click a button."
                         wait_for_continue = False
+                        outcome_type = None
                 # Slider drag start
                 if slider_rect and slider_rect.collidepoint(mouse_pos) and not animating and not game_over:
                     slider_dragging = True
@@ -237,27 +278,33 @@ def main(max_frames: int | None = None):
                         player_money += bet_amount
                         pot -= bet_amount
                         message = f"You won ${bet_amount}! {card_name(next_card)} is higher."
+                        outcome_type = 'win'
                     elif value2 == value1:
                         player_money -= bet_amount * 2
                         pot += bet_amount * 2
                         message = f"Tie! You lose double: ${bet_amount*2}. ({card_name(next_card)})"
+                        outcome_type = 'tie'
                     else:
                         player_money -= bet_amount
                         pot += bet_amount
                         message = f"You lost ${bet_amount}. {card_name(next_card)} is lower."
+                        outcome_type = 'lose'
                 else:
                     if value2 < value1:
                         player_money += bet_amount
                         pot -= bet_amount
                         message = f"You won ${bet_amount}! {card_name(next_card)} is lower."
+                        outcome_type = 'win'
                     elif value2 == value1:
                         player_money -= bet_amount * 2
                         pot += bet_amount * 2
                         message = f"Tie! You lose double: ${bet_amount*2}. ({card_name(next_card)})"
+                        outcome_type = 'tie'
                     else:
                         player_money -= bet_amount
                         pot += bet_amount
                         message = f"You lost ${bet_amount}. {card_name(next_card)} is higher."
+                        outcome_type = 'lose'
                 last_cards = (current_card, next_card)
                 animating = False
                 animation_progress = 0
@@ -280,12 +327,24 @@ def main(max_frames: int | None = None):
             slider_x, slider_y, slider_w, slider_h = WIDTH//2 - 150, HEIGHT//2 + 60, 300, 30
             slider_rect = draw_slider(slider_x, slider_y, slider_w, slider_h, min_val, max_val, slider_value, slider_dragging)
             bet_amount = slider_value
-            bet_display = small_font.render(f"Bet: ${bet_amount}", True, WHITE)
-            screen.blit(bet_display, (WIDTH//2 - bet_display.get_width()//2, slider_y - 30))
 
-        # Draw message
-        msg_text = small_font.render(message, True, WHITE)
-        screen.blit(msg_text, (WIDTH//2 - msg_text.get_width()//2, HEIGHT - 50))
+        # Draw central outcome / status message above cards
+        color_map = {
+            'win': ((255,255,255),(0,90,220)),
+            'lose': ((255,255,255),(200,0,0)),
+            'tie': ((255,255,255),(180,120,0)),
+            'pass': ((255,255,255),(50,120,200)),
+            'quit': ((255,255,255),(120,120,120)),
+            None: ((255,255,255),(0,0,0))
+        }
+        inner, outline = color_map.get(outcome_type, ((255,255,255),(0,0,0)))
+        max_text_width = WIDTH - 60
+        wrapped_surfaces, total_h = wrap_outlined_text(message, display_font, inner, outline, max_text_width, outline_px=3, line_spacing=8)
+        top_y = 80  # lowered to avoid overlap with money/pot display
+        current_y = top_y
+        for i, surf_line in enumerate(wrapped_surfaces):
+            screen.blit(surf_line, (WIDTH//2 - surf_line.get_width()//2, current_y))
+            current_y += surf_line.get_height() + 8
         # Show click anywhere to continue after round
         if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
             continue_text = small_font.render("Click anywhere to continue", True, RED)
@@ -305,6 +364,10 @@ def main(max_frames: int | None = None):
         button_rects['quit'] = draw_button("Quit", WIDTH//2 + 200, btn_y, btn_w, btn_h, active_quit)
         active_restart = game_over and wait_for_continue
         button_rects['restart'] = draw_button("Restart", WIDTH//2 + 60, btn_y + 60, btn_w, btn_h, active_restart)
+
+        # Draw bet amount near bottom for visibility
+        bet_outline = render_outlined_text(f"Bet: ${bet_amount}", small_font, (255,255,255), (0,0,0), outline_px=2)
+        screen.blit(bet_outline, (WIDTH//2 - bet_outline.get_width()//2, HEIGHT - 40))
 
         # Button logic
         if mouse_clicked:
@@ -334,10 +397,12 @@ def main(max_frames: int | None = None):
                             slider_value = 1
                             bet_amount = 0
                             message = "Card passed. Adjust your bet and click a button."
+                            outcome_type = 'pass'
                         elif name == 'quit' and not animating:
                             game_over = True
                             wait_for_continue = True
                             message = "You quit the game. Press Restart to play again."
+                            outcome_type = 'quit'
                         elif name == 'restart' and game_over and wait_for_continue:
                             player_money = 100
                             pot = 50
@@ -353,6 +418,7 @@ def main(max_frames: int | None = None):
                             guess = None
                             wait_for_continue = False
                             last_cards = (None, None)
+                            outcome_type = None
         pygame.display.flip()
         clock.tick(60)
         if max_frames is not None:
