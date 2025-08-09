@@ -1,4 +1,5 @@
-# High-Low Poker Game
+# PyPoker 
+## High-Low Poker Game
 
 A simple and interactive High-Low poker game built with Python and Pygame. Test your luck and skill by predicting whether the next card will be higher or lower than the current one!
 
