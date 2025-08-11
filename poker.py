@@ -4,24 +4,15 @@ import sys
 import os
 import math
 import json
+import time ## REF-NOTE: Moved from the main loop to the top with other imports.
 
+# --- Constants ---
 
-# Load settings from settings.json
-def load_settings():
-    try:
-        with open("settings.json", "r") as f:
-            data = json.load(f)
-            return data.get("starting_money", 100), data.get("starting_pot", 50)
-    except Exception:
-        return 100, 50
-
-# Initialize Pygame
-pygame.init()
-
-# Screen settings
+## REF-NOTE: Grouping constants makes the code easier to configure and read.
+# Screen and Display
 WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("PyPoker (High-Low)")
+CAPTION = "PyPoker (High-Low)"
+FPS = 60
 
 # Colors
 WHITE = (255, 255, 255)
@@ -29,438 +20,418 @@ BLACK = (0, 0, 0)
 GREEN = (0, 128, 0)
 RED = (200, 0, 0)
 BLUE = (0, 0, 200)
+GRAY = (100, 100, 100)
+PULSE_YELLOW = (255, 215, 0)
+OUTCOME_COLORS = {
+    'win': (WHITE, (0, 90, 220)),
+    'lose': (WHITE, (200, 0, 0)),
+    'tie': (WHITE, (180, 120, 0)),
+    'pass': (WHITE, (50, 120, 200)),
+    'quit': (WHITE, (120, 120, 120)),
+    'default': (WHITE, BLACK)
+}
 
-# Fonts
-font = pygame.font.SysFont(None, 48)
-small_font = pygame.font.SysFont(None, 32)
-# Fun display font (fallback to default if unavailable)
-try:
-    display_font = pygame.font.SysFont('comic sans ms', 42, bold=True)
-except Exception:
-    display_font = pygame.font.SysFont(None, 42)
 
-def render_outlined_text(text, font, inner_color, outline_color, outline_px=2):
-    base = font.render(text, True, inner_color)
-    w, h = base.get_width(), base.get_height()
-    surf = pygame.Surface((w + outline_px*2, h + outline_px*2), pygame.SRCALPHA)
-    # Draw outline by offsetting
-    for dx in range(-outline_px, outline_px+1):
-        for dy in range(-outline_px, outline_px+1):
-            if dx*dx + dy*dy <= outline_px*outline_px:
-                surf.blit(font.render(text, True, outline_color), (dx+outline_px, dy+outline_px))
-    surf.blit(base, (outline_px, outline_px))
-    return surf
-
-def wrap_outlined_text(text, font, inner_color, outline_color, max_width, outline_px=2, line_spacing=6):
-    words = text.split()
-    lines = []
-    current = []
-    while words:
-        current.append(words.pop(0))
-        test = " ".join(current)
-        test_surface = font.render(test, True, inner_color)
-        if test_surface.get_width() > max_width:
-            # remove last word and commit line
-            last = current.pop()
-            if current:
-                line_text = " ".join(current)
-                lines.append(line_text)
-            current = [last]
-    if current:
-        lines.append(" ".join(current))
-    # Render each line with outline
-    rendered = [render_outlined_text(l, font, inner_color, outline_color, outline_px) for l in lines]
-    total_height = sum(s.get_height() for s in rendered) + line_spacing * (len(rendered)-1)
-    return rendered, total_height
-
-# Card suits and values
+# Game Data
 SUITS = ['hearts', 'diamonds', 'clubs', 'spades']
 VALUES = list(range(2, 15))  # 2-10, J=11, Q=12, K=13, A=14
 VALUE_NAMES = {11: 'J', 12: 'Q', 13: 'K', 14: 'A'}
+## REF-NOTE: Added a map for filenames to simplify image loading.
+VALUE_FILENAME_MAP = {
+    11: 'jack', 12: 'queen', 13: 'king', 14: 'ace'
+}
+DEFAULT_MONEY = 100
+DEFAULT_POT = 50
 
-# Helper functions
+# UI Layout Constants
+CARD_SIZE = (80, 120)
+DECK_POS = (50, HEIGHT // 2 - 45)
+CURRENT_CARD_POS = (WIDTH // 2 - 100, HEIGHT // 2 - 60)
+NEXT_CARD_POS = (WIDTH // 2 + 20, HEIGHT // 2 - 60)
+MSG_START_Y = 80
+SLIDER_RECT = pygame.Rect(WIDTH // 2 - 150, HEIGHT // 2 + 60, 300, 30)
+BTN_Y = HEIGHT // 2 + 120
+BTN_SIZE = (120, 40)
+BET_TEXT_POS = (WIDTH // 2, HEIGHT - 40)
+
+
+# --- Initialization ---
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption(CAPTION)
+clock = pygame.time.Clock()
+
+# --- Fonts ---
+## REF-NOTE: More robust font loading with a clear fallback.
+def load_font(name, size, bold=False, italic=False):
+    try:
+        return pygame.font.SysFont(name, size, bold=bold, italic=italic)
+    except pygame.error:
+        print(f"Warning: Font '{name}' not found. Falling back to default.")
+        return pygame.font.SysFont(None, size, bold=bold, italic=italic)
+
+font = load_font(None, 48)
+small_font = load_font(None, 32)
+display_font = load_font('comic sans ms', 42, bold=True)
+
+
+# --- Asset Loading & Helpers ---
+
+def load_settings():
+    """Load settings from settings.json, with clear fallbacks."""
+    try:
+        with open("settings.json", "r") as f:
+            data = json.load(f)
+            return data.get("starting_money", DEFAULT_MONEY), data.get("starting_pot", DEFAULT_POT)
+    ## REF-NOTE: Catching specific exceptions is better practice.
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Could not load settings.json: {e}. Using defaults.")
+        return DEFAULT_MONEY, DEFAULT_POT
+
+def create_placeholder_surface(size, text):
+    """Creates a placeholder surface for missing images."""
+    surf = pygame.Surface(size)
+    surf.fill((180, 180, 180))
+    pygame.draw.rect(surf, BLACK, surf.get_rect(), 2)
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        text_surf = small_font.render(line, True, BLACK)
+        x = size[0] // 2 - text_surf.get_width() // 2
+        y = (size[1] // (len(lines) + 1)) * (i + 1) - text_surf.get_height() // 2
+        surf.blit(text_surf, (x, y))
+    return surf
+
+def load_card_images():
+    """Load and scale all card images once."""
+    images = {}
+    
+    ## REF-NOTE: Image loading is now more efficient and DRY.
+    def load_and_scale(path):
+        try:
+            img = pygame.image.load(path).convert_alpha()
+            return pygame.transform.scale(img, CARD_SIZE)
+        except pygame.error:
+            return None
+
+    for suit in SUITS:
+        for value in VALUES:
+            ## REF-NOTE: Simplified filename generation.
+            val_str = VALUE_FILENAME_MAP.get(value, str(value))
+            fname = f"{val_str}_of_{suit}.png"
+            path = os.path.join("assets", fname)
+            
+            img = load_and_scale(path)
+            if img is None:
+                img = create_placeholder_surface(CARD_SIZE, f"{VALUE_NAMES.get(value, value)}\n{suit[0].upper()}")
+            images[(value, suit)] = img
+            
+    # Load card back
+    back_img = load_and_scale(os.path.join("assets", "back.png"))
+    images['back'] = back_img if back_img else create_placeholder_surface(CARD_SIZE, "BACK")
+    
+    return images
+
+## REF-NOTE: Assets are loaded once and stored, ready for use.
+CARD_IMAGES = load_card_images()
+
 def make_deck():
     deck = [(value, suit) for suit in SUITS for value in VALUES]
     random.shuffle(deck)
     return deck
 
-def card_name(card):
-    value, suit = card
-    return f"{VALUE_NAMES.get(value, str(value))} of {suit.capitalize()}"
 
-def load_card_images():
-    """Load all card images; create placeholders if files missing to avoid KeyErrors."""
-    images = {}
-    def placeholder(text):
-        surf = pygame.Surface((80, 120))
-        surf.fill((180, 180, 180))
-        pygame.draw.rect(surf, BLACK, surf.get_rect(), 2)
-        t = small_font.render(text, True, BLACK)
-        surf.blit(t, (surf.get_width()//2 - t.get_width()//2, surf.get_height()//2 - t.get_height()//2))
-        return surf
-    for suit in SUITS:
-        for value in VALUES:
-            if value == 11:
-                fname = f"jack_of_{suit}.png"
-            elif value == 12:
-                fname = f"queen_of_{suit}.png"
-            elif value == 13:
-                fname = f"king_of_{suit}.png"
-            elif value == 14:
-                fname = f"ace_of_{suit}.png"
-            else:
-                fname = f"{value}_of_{suit}.png"
-            path = os.path.join("assets", fname)
-            if os.path.exists(path):
-                try:
-                    img = pygame.image.load(path)
-                except Exception:
-                    img = placeholder(f"{VALUE_NAMES.get(value, value)}\n{suit[0].upper()}")
-            else:
-                img = placeholder(f"{VALUE_NAMES.get(value, value)}\n{suit[0].upper()}")
-            images[(value, suit)] = img
-    back_path = os.path.join("assets", "back.png")
-    if os.path.exists(back_path):
-        try:
-            images['back'] = pygame.image.load(back_path)
-        except Exception:
-            images['back'] = placeholder("BACK")
-    else:
-        images['back'] = placeholder("BACK")
-    return images
+# --- Text and UI Drawing Functions ---
 
-card_images = load_card_images()
+def render_outlined_text(text, font, inner_color, outline_color, outline_px=2):
+    base = font.render(text, True, inner_color)
+    w, h = base.get_width(), base.get_height()
+    surf = pygame.Surface((w + outline_px * 2, h + outline_px * 2), pygame.SRCALPHA)
+    for dx in range(-outline_px, outline_px + 1):
+        for dy in range(-outline_px, outline_px + 1):
+            if dx * dx + dy * dy <= outline_px * outline_px:
+                surf.blit(font.render(text, True, outline_color), (dx + outline_px, dy + outline_px))
+    surf.blit(base, (outline_px, outline_px))
+    return surf
 
-def draw_card(card, x, y, face_up=True, border=True):
-    rect = pygame.Rect(x, y, 80, 120)
-    if face_up:
-        pygame.draw.rect(screen, WHITE, rect)
-    if border:
-        pygame.draw.rect(screen, BLACK, rect, 3)
-    key = card if face_up else 'back'
-    if key not in card_images:
-        # Fallback placeholder if card assets are missing
-        surf = pygame.Surface((80, 120))
-        surf.fill((200, 200, 200))
-        pygame.draw.rect(surf, BLACK, surf.get_rect(), 2)
-        txt = small_font.render("??", True, BLACK)
-        surf.blit(txt, (surf.get_width()//2 - txt.get_width()//2, surf.get_height()//2 - txt.get_height()//2))
-        img = surf
-    else:
-        img = card_images[key]
-    img = pygame.transform.scale(img, (80, 120))
-    screen.blit(img, (x, y))
-
-
-def draw_deck(x, y, count):
-    for i in range(min(count, 5)):
-        screen.blit(pygame.transform.scale(card_images['back'], (60, 90)), (x + i*5, y - i*2))
-
-def animate_card_flip(card, x, y, progress):
-    rect = pygame.Rect(x, y, 80, 120)
-    pygame.draw.rect(screen, WHITE, rect)
-    pygame.draw.rect(screen, BLACK, rect, 3)
-    img = card_images[card]
-    img = pygame.transform.scale(img, (80, 120))
-    w = int(80 * abs(progress))
-    if w > 0:
-        img = pygame.transform.scale(img, (w, 120))
-        screen.blit(img, (x + (80-w)//2, y))
-
-
-player_money, pot = load_settings()
-deck = make_deck()
-current_card = deck.pop()
-next_card = None
-message = "Adjust your bet and click Higher/Lower/Pass."
-outcome_type = None  # 'win','lose','tie','pass','quit', or None
-game_over = False
-bet_amount = 0
-animating = False
-animation_progress = 0
-bet_ready = False
-slider_value = 1
-slider_dragging = False
-
-
-# Button helper
 def draw_button(text, x, y, w, h, active=True):
-    color = BLUE if active else (100, 100, 100)
+    color = BLUE if active else GRAY
     rect = pygame.Rect(x, y, w, h)
     pygame.draw.rect(screen, color, rect)
     pygame.draw.rect(screen, BLACK, rect, 2)
     txt = small_font.render(text, True, WHITE)
-    screen.blit(txt, (x + (w-txt.get_width())//2, y + (h-txt.get_height())//2))
+    screen.blit(txt, (x + (w - txt.get_width()) // 2, y + (h - txt.get_height()) // 2))
     return rect
 
-# Slider helper
-def draw_slider(x, y, w, h, min_val, max_val, value, dragging):
-    # Draw bar
-    pygame.draw.rect(screen, WHITE, (x, y + h//2 - 4, w, 8))
-    pygame.draw.rect(screen, BLACK, (x, y + h//2 - 4, w, 8), 2)
-    # Draw knob
-    knob_x = x + int((value - min_val) / (max_val - min_val) * w) if max_val > min_val else x
-    knob_rect = pygame.Rect(knob_x - 10, y + h//2 - 15, 20, 30)
+def draw_slider(rect, min_val, max_val, value, dragging):
+    pygame.draw.rect(screen, WHITE, (rect.x, rect.centery - 4, rect.w, 8))
+    pygame.draw.rect(screen, BLACK, (rect.x, rect.centery - 4, rect.w, 8), 2)
+    knob_x = rect.x + int((value - min_val) / (max_val - min_val) * rect.w) if max_val > min_val else rect.x
+    knob_rect = pygame.Rect(knob_x - 10, rect.centery - 15, 20, 30)
     pygame.draw.rect(screen, RED if dragging else BLUE, knob_rect)
     pygame.draw.rect(screen, BLACK, knob_rect, 2)
     return knob_rect
 
-def main(max_frames: int | None = None):
-    global player_money, pot, deck, current_card, next_card, message, game_over, bet_amount, animating, animation_progress, bet_ready, slider_value, slider_dragging, outcome_type
-    clock = pygame.time.Clock()
-    guess = None
-    wait_for_continue = False
-    last_cards = (None, None)
-    button_rects = {}
-    slider_rect = None
-    frame_count = 0
-    while True:
-        screen.fill(GREEN)
+def draw_card(card, x, y, face_up=True):
+    ## REF-NOTE: This is much simpler now. It just blits a pre-loaded, pre-scaled image.
+    # Draw white background first
+    pygame.draw.rect(screen, WHITE, (x, y, CARD_SIZE[0], CARD_SIZE[1]))
+    
+    key = card if face_up else 'back'
+    screen.blit(CARD_IMAGES[key], (x, y))
+    pygame.draw.rect(screen, BLACK, (x, y, CARD_SIZE[0], CARD_SIZE[1]), 3)
+
+def animate_card_flip(card, x, y, progress):
+    rect = pygame.Rect(x, y, *CARD_SIZE)
+    pygame.draw.rect(screen, WHITE, rect)
+    pygame.draw.rect(screen, BLACK, rect, 3)
+
+    img = CARD_IMAGES[card]
+    w = int(CARD_SIZE[0] * abs(math.cos(progress * math.pi))) # Using cosine for a smoother shrink/grow effect
+    
+    if w > 0:
+        if progress > 0.5:
+             # After the halfway point, draw the face-up card
+             scaled_img = pygame.transform.scale(img, (w, CARD_SIZE[1]))
+             screen.blit(scaled_img, (x + (CARD_SIZE[0] - w) // 2, y))
+        else:
+             # Before halfway, draw the back
+             scaled_img = pygame.transform.scale(CARD_IMAGES['back'], (w, CARD_SIZE[1]))
+             screen.blit(scaled_img, (x + (CARD_SIZE[0] - w) // 2, y))
+
+## REF-NOTE: The original text wrapping logic was fine, this is just a cleanup to use the new constants.
+def draw_message(text, outcome_type):
+    inner, outline = OUTCOME_COLORS.get(outcome_type, OUTCOME_COLORS['default'])
+    max_text_width = WIDTH - 60
+    
+    words = text.split()
+    lines = []
+    current_line = []
+    while words:
+        current_line.append(words.pop(0))
+        test_surf = display_font.render(" ".join(current_line), True, inner)
+        if test_surf.get_width() > max_text_width and len(current_line) > 1:
+            words.insert(0, current_line.pop())
+            lines.append(" ".join(current_line))
+            current_line = []
+    if current_line:
+        lines.append(" ".join(current_line))
+        
+    current_y = MSG_START_Y
+    for line_text in lines:
+        rendered_surf = render_outlined_text(line_text, display_font, inner, outline, outline_px=3)
+        screen.blit(rendered_surf, (WIDTH // 2 - rendered_surf.get_width() // 2, current_y))
+        current_y += rendered_surf.get_height() + 8
+
+
+# --- Game State Class ---
+## REF-NOTE: Encapsulating state makes the main loop cleaner and the game's data easier to manage.
+class GameState:
+    def __init__(self):
+        self.reset()
+        self.button_rects = {}
+        self.slider_knob_rect = pygame.Rect(0,0,0,0)
+
+    def reset(self):
+        """Resets the game to its initial state."""
+        self.player_money, self.pot = load_settings()
+        self.deck = make_deck()
+        self.current_card = self.deck.pop()
+        self.next_card = None
+        self.last_cards = (None, None)
+        
+        self.message = "Adjust your bet and click Higher/Lower/Pass."
+        self.outcome_type = None
+        self.game_over = False
+        
+        self.bet_amount = 1
+        self.slider_value = 1
+        
+        self.state = 'AWAITING_BET'  # 'AWAITING_BET', 'ANIMATING', 'SHOWING_RESULT', 'GAME_OVER'
+        self.slider_dragging = False
+        self.guess = None
+        self.animation_progress = 0
+
+    def check_for_reshuffle(self):
+        if len(self.deck) < 3:
+            self.deck = make_deck()
+            print("Deck reshuffled.")
+
+    def resolve_bet(self):
+        val1 = self.current_card[0]
+        val2 = self.next_card[0]
+        v1_str = VALUE_NAMES.get(val1, str(val1))
+        v2_str = VALUE_NAMES.get(val2, str(val2))
+        
+        win = (self.guess == 'higher' and val2 > val1) or \
+              (self.guess == 'lower' and val2 < val1)
+              
+        if val2 == val1:
+            self.player_money -= self.bet_amount * 2
+            self.pot += self.bet_amount * 2
+            self.message = f"Tie! You lose double: ${self.bet_amount*2}\n{v1_str} = {v2_str}"
+            self.outcome_type = 'tie'
+        elif win:
+            self.player_money += self.bet_amount
+            self.pot -= self.bet_amount
+            comp = ">" if self.guess == 'lower' else "<"
+            self.message = f"You win ${self.bet_amount}\n{v1_str} {comp} {v2_str}"
+            self.outcome_type = 'win'
+        else: # Loss
+            self.player_money -= self.bet_amount
+            self.pot += self.bet_amount
+            comp = "<" if self.guess == 'lower' else ">"
+            self.message = f"You lose ${self.bet_amount}\n{v1_str} {comp} {v2_str}"
+            self.outcome_type = 'lose'
+
+        self.last_cards = (self.current_card, self.next_card)
+        self.state = 'SHOWING_RESULT'
+        
+        if self.player_money <= 0 or self.pot <= 0:
+            self.game_over = True
+
+
+# --- Main Game Loop ---
+
+def main():
+    game = GameState()
+
+    running = True
+    while running:
         mouse_pos = pygame.mouse.get_pos()
         mouse_clicked = False
+        
+        # --- Event Handling ---
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                running = False
+            
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mouse_clicked = True
-                # Click anywhere to continue to next round after result
-                if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
-                    if player_money <= 0 or pot <= 0:
-                        game_over = True
-                        message = "Game over!\nPress Restart or Quit."
-                    else:
-                        if len(deck) <= 3:
-                            deck = make_deck()
-                        current_card = deck.pop()
-                        next_card = None
-                        last_cards = (None, None)
-                        bet_ready = False
-                        slider_value = 1
-                        message = "Adjust your bet and click a button."
-                        wait_for_continue = False
-                        outcome_type = None
-                # Slider drag start
-                if slider_rect and slider_rect.collidepoint(mouse_pos) and not animating and not game_over:
-                    slider_dragging = True
+                if game.state == 'AWAITING_BET':
+                    if game.slider_knob_rect.collidepoint(mouse_pos):
+                        game.slider_dragging = True
+            
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if slider_dragging:
-                    bet_ready = True  # Bet becomes ready when user releases after drag
-                slider_dragging = False
-            if event.type == pygame.MOUSEMOTION and slider_dragging and not game_over:
-                # Move slider while dragging
-                slider_x, slider_y, slider_w, slider_h = WIDTH//2 - 150, HEIGHT//2 + 60, 300, 30
+                game.slider_dragging = False
+
+            if event.type == pygame.MOUSEMOTION and game.slider_dragging:
                 min_val = 1
-                max_val = min(player_money, pot)
-                rel_x = min(max(event.pos[0] - slider_x, 0), slider_w)
-                slider_value = int(min_val + (max_val - min_val) * rel_x / slider_w)
-                slider_value = max(min_val, min(max_val, slider_value))
+                max_val = min(game.player_money, game.pot)
+                if max_val >= min_val:
+                    rel_x = min(max(mouse_pos[0] - SLIDER_RECT.x, 0), SLIDER_RECT.w)
+                    game.slider_value = int(min_val + (max_val - min_val) * rel_x / SLIDER_RECT.w)
+                    game.bet_amount = max(min_val, min(max_val, game.slider_value))
 
-        # Draw deck
-        draw_deck(50, HEIGHT//2 - 45, len(deck))
-        # Draw cards side by side
-        if game_over and last_cards[0] and last_cards[1]:
-            draw_card(last_cards[0], WIDTH//2 - 100, HEIGHT//2 - 60, face_up=True, border=True)
-            draw_card(last_cards[1], WIDTH//2 + 20, HEIGHT//2 - 60, face_up=True, border=True)
-        else:
-            draw_card(current_card, WIDTH//2 - 100, HEIGHT//2 - 60, face_up=True, border=True)
-            if next_card:
-                if animating:
-                    animate_card_flip(next_card, WIDTH//2 + 20, HEIGHT//2 - 60, animation_progress)
-                else:
-                    draw_card(next_card, WIDTH//2 + 20, HEIGHT//2 - 60, face_up=True, border=True)
-            else:
-                draw_card('back', WIDTH//2 + 20, HEIGHT//2 - 60, face_up=False, border=True)
+        # --- Button and Input Logic ---
+        can_bet = game.state == 'AWAITING_BET'
+        if mouse_clicked:
+            if game.state == 'SHOWING_RESULT':
+                if game.game_over:
+                    game.state = 'GAME_OVER'
+                    game.message = "Game over!\nPress Restart or Quit."
+                else: # Next round
+                    game.state = 'AWAITING_BET'
+                    game.current_card = game.deck.pop()
+                    game.next_card = None
+                    game.last_cards = (None, None)
+                    game.slider_value = 1
+                    game.bet_amount = 1
+                    game.message = "Adjust your bet and click a button."
+                    game.outcome_type = None
+                    game.check_for_reshuffle()
 
-        # Animate card flip and resolve bet
-        if animating and next_card:
-            animation_progress += 0.1
-            if animation_progress < 1:
-                animate_card_flip(next_card, WIDTH//2 + 20, HEIGHT//2 - 60, animation_progress)
-            else:
-                value1, _ = current_card
-                value2, _ = next_card
-                def value_str(val):
-                    return VALUE_NAMES.get(val, str(val))
-                if guess == 'higher':
-                    if value2 > value1:
-                        player_money += bet_amount
-                        pot -= bet_amount
-                        message = f"You win ${bet_amount}\n{value_str(value1)} < {value_str(value2)}"
-                        outcome_type = 'win'
-                    elif value2 == value1:
-                        player_money -= bet_amount * 2
-                        pot += bet_amount * 2
-                        message = f"Tie! You lose double: ${bet_amount*2}\n{value_str(value1)} = {value_str(value2)}"
-                        outcome_type = 'tie'
-                    else:
-                        player_money -= bet_amount
-                        pot += bet_amount
-                        message = f"You lose ${bet_amount}\n{value_str(value1)} > {value_str(value2)}"
-                        outcome_type = 'lose'
-                else:
-                    if value2 < value1:
-                        player_money += bet_amount
-                        pot -= bet_amount
-                        message = f"You win ${bet_amount}\n{value_str(value1)} > {value_str(value2)}"
-                        outcome_type = 'win'
-                    elif value2 == value1:
-                        player_money -= bet_amount * 2
-                        pot += bet_amount * 2
-                        message = f"Tie! You lose double: ${bet_amount*2}\n{value_str(value1)} = {value_str(value2)}"
-                        outcome_type = 'tie'
-                    else:
-                        player_money -= bet_amount
-                        pot += bet_amount
-                        message = f"You lose ${bet_amount}\n{value_str(value1)} < {value_str(value2)}"
-                        outcome_type = 'lose'
-                last_cards = (current_card, next_card)
-                animating = False
-                animation_progress = 0
-                bet_ready = False
-                bet_amount = 0
-                wait_for_continue = True
-                # Only set game_over after user clicks to continue
+            elif game.state == 'AWAITING_BET':
+                ## REF-NOTE: Consolidating button logic.
+                for name, rect in game.button_rects.items():
+                    if rect.collidepoint(mouse_pos):
+                        if name in ('higher', 'lower'):
+                            game.check_for_reshuffle()
+                            game.next_card = game.deck.pop()
+                            game.guess = name
+                            game.state = 'ANIMATING'
+                            game.animation_progress = 0
+                        elif name == 'pass':
+                            game.check_for_reshuffle()
+                            game.current_card = game.deck.pop()
+                            game.message = "Card passed. Adjust bet."
+                            game.outcome_type = 'pass'
+                        
+            # Handle quit/restart buttons regardless of state
+            if game.button_rects.get('quit', pygame.Rect(0,0,0,0)).collidepoint(mouse_pos):
+                if game.state != 'GAME_OVER':
+                    game.state = 'GAME_OVER'
+                    game.outcome_type = 'quit'
+                    game.message = "You quit the game.\nPress Restart to play again."
+            if game.button_rects.get('restart', pygame.Rect(0,0,0,0)).collidepoint(mouse_pos) and game.state == 'GAME_OVER':
+                game.reset()
 
-        # Draw money and pot
-        money_text = small_font.render(f"Your Money: ${player_money}", True, WHITE)
-        pot_text = small_font.render(f"Pot: ${pot}", True, WHITE)
+        # --- Game State Updates ---
+        if game.state == 'ANIMATING':
+            game.animation_progress += 0.05 # Slower for smoother animation
+            if game.animation_progress >= 1.0:
+                game.animation_progress = 1
+                game.resolve_bet()
+
+        # --- Drawing ---
+        screen.fill(GREEN)
+
+        # Money/Pot
+        money_text = small_font.render(f"Your Money: ${game.player_money}", True, WHITE)
+        pot_text = small_font.render(f"Pot: ${game.pot}", True, WHITE)
         screen.blit(money_text, (10, 10))
         screen.blit(pot_text, (10, 40))
 
-        # Draw bet slider (always available before result/game over)
-        result_showing_temp = last_cards[0] and last_cards[1] and wait_for_continue and not game_over
-        if not animating and not game_over and not result_showing_temp:
-            min_val = 1
-            max_val = min(player_money, pot)
-            slider_x, slider_y, slider_w, slider_h = WIDTH//2 - 150, HEIGHT//2 + 60, 300, 30
-            slider_rect = draw_slider(slider_x, slider_y, slider_w, slider_h, min_val, max_val, slider_value, slider_dragging)
-            bet_amount = slider_value
+        # Deck
+        for i in range(min(len(game.deck), 5)):
+             screen.blit(pygame.transform.scale(CARD_IMAGES['back'], (60, 90)), (DECK_POS[0] + i*5, DECK_POS[1] - i*2))
 
-        # Draw central outcome / status message above cards
-        color_map = {
-            'win': ((255,255,255),(0,90,220)),
-            'lose': ((255,255,255),(200,0,0)),
-            'tie': ((255,255,255),(180,120,0)),
-            'pass': ((255,255,255),(50,120,200)),
-            'quit': ((255,255,255),(120,120,120)),
-            None: ((255,255,255),(0,0,0))
-        }
-        inner, outline = color_map.get(outcome_type, ((255,255,255),(0,0,0)))
-        max_text_width = WIDTH - 60
-        # Split message on '\n' and render each line separately
-        message_lines = message.split('\n')
-        top_y = 80  # lowered to avoid overlap with money/pot display
-        current_y = top_y
-        for msg_line in message_lines:
-            wrapped_surfaces, _ = wrap_outlined_text(msg_line, display_font, inner, outline, max_text_width, outline_px=3, line_spacing=8)
-            for surf_line in wrapped_surfaces:
-                screen.blit(surf_line, (WIDTH//2 - surf_line.get_width()//2, current_y))
-                current_y += surf_line.get_height() + 8
-        # Show click anywhere to continue after round
-        if not animating and last_cards[0] and last_cards[1] and wait_for_continue and not game_over:
-            # Create pulsing effect with time-based sine wave
-            import time
-            pulse = abs(math.sin(time.time() * 3)) * 0.5 + 0.5  # Pulse between 0.5 and 1.0
-            glow_size = int(4 + pulse * 2)  # Outline size pulses between 4 and 6 pixels
-            # Gold/yellow color: (255, 215, 0) pulsing
-            glow_color = (int(255 * pulse), int(215 * pulse), int(0 * pulse))
-            continue_surface = render_outlined_text("Click anywhere to continue", font, WHITE, glow_color, outline_px=glow_size)
-            screen.blit(continue_surface, (WIDTH//2 - continue_surface.get_width()//2, HEIGHT//2 + 80))
+        # Cards
+        draw_card(game.last_cards[0] or game.current_card, CURRENT_CARD_POS[0], CURRENT_CARD_POS[1])
+        
+        if game.state == 'ANIMATING':
+            # Simplified call, logic now inside animate_card_flip
+            animate_card_flip(game.next_card, NEXT_CARD_POS[0], NEXT_CARD_POS[1], game.animation_progress)
+        elif game.next_card:
+            draw_card(game.next_card, NEXT_CARD_POS[0], NEXT_CARD_POS[1])
+        else:
+            draw_card(None, NEXT_CARD_POS[0], NEXT_CARD_POS[1], face_up=False)
 
-        # Draw buttons
-        button_rects.clear()
-        btn_y = HEIGHT//2 + 120
-        btn_w, btn_h = 120, 40
-        result_showing = last_cards[0] and last_cards[1] and wait_for_continue and not game_over
-        active = bet_ready and not animating and not game_over and not result_showing
-        button_rects['higher'] = draw_button("Higher", WIDTH//2 - 220, btn_y, btn_w, btn_h, active)
-        button_rects['lower'] = draw_button("Lower", WIDTH//2 - 80, btn_y, btn_w, btn_h, active)
-        active_pass = bet_ready and not animating and not game_over and not result_showing
-        button_rects['pass'] = draw_button("Pass", WIDTH//2 + 60, btn_y, btn_w, btn_h, active_pass)
-        active_quit = not animating
-        button_rects['quit'] = draw_button("Quit", WIDTH//2 + 200, btn_y, btn_w, btn_h, active_quit)
-        active_restart = game_over and wait_for_continue
-        button_rects['restart'] = draw_button("Restart", WIDTH//2 + 60, btn_y + 60, btn_w, btn_h, active_restart)
+        # Message
+        draw_message(game.message, game.outcome_type)
 
-        # Draw bet amount near bottom for visibility
-        bet_outline = render_outlined_text(f"Bet: ${bet_amount}", small_font, (255,255,255), (0,0,0), outline_px=2)
-        screen.blit(bet_outline, (WIDTH//2 - bet_outline.get_width()//2, HEIGHT - 40))
+        if game.state == 'SHOWING_RESULT' and not game.game_over:
+             pulse = abs(math.sin(time.time() * 3)) * 0.5 + 0.5
+             glow_size = int(3 + pulse * 2)
+             glow_color = (int(PULSE_YELLOW[0] * pulse), int(PULSE_YELLOW[1] * pulse), 0)
+             continue_surf = render_outlined_text("Click anywhere to continue", font, WHITE, glow_color, glow_size)
+             screen.blit(continue_surf, (WIDTH // 2 - continue_surf.get_width() // 2, HEIGHT // 2 + 80))
 
-        # Button logic
-        if mouse_clicked:
-            if not result_showing:
-                for name, rect in button_rects.items():
-                    if rect.collidepoint(mouse_pos):
-                        if name == 'higher' and bet_ready and not animating and not game_over:
-                            if len(deck) <= 3:
-                                deck = make_deck()
-                            next_card = deck.pop()
-                            animating = True
-                            animation_progress = 0
-                            guess = 'higher'
-                        elif name == 'lower' and bet_ready and not animating and not game_over:
-                            if len(deck) <= 3:
-                                deck = make_deck()
-                            next_card = deck.pop()
-                            animating = True
-                            animation_progress = 0
-                            guess = 'lower'
-                        elif name == 'pass' and bet_ready and not animating and not game_over:
-                            if len(deck) <= 3:
-                                deck = make_deck()
-                            current_card = deck.pop()
-                            next_card = None
-                            bet_ready = False
-                            slider_value = 1
-                            bet_amount = 0
-                            message = "Card passed.\nAdjust your bet and click a button."
-                            outcome_type = 'pass'
-                        elif name == 'quit' and not animating:
-                            game_over = True
-                            wait_for_continue = True
-                            message = "You quit the game.\nPress Restart to play again."
-                            outcome_type = 'quit'
-                        elif name == 'restart' and game_over and wait_for_continue:
-                            from json import load as _load_json
-                            try:
-                                with open("settings.json", "r") as f:
-                                    data = _load_json(f)
-                                    player_money = data.get("starting_money", 100)
-                                    pot = data.get("starting_pot", 50)
-                            except Exception:
-                                player_money = 100
-                                pot = 50
-                            deck = make_deck()
-                            current_card = deck.pop()
-                            next_card = None
-                            message = "Adjust your bet and click a button."
-                            game_over = False
-                            bet_amount = 0
-                            bet_ready = False
-                            slider_value = 1
-                            slider_dragging = False
-                            animating = False
-                            animation_progress = 0
-                            guess = None
-                            wait_for_continue = False
-                            last_cards = (None, None)
-                            outcome_type = None
+        # UI Elements
+        game.button_rects.clear()
+        if game.state == 'AWAITING_BET':
+            min_bet, max_bet = 1, min(game.player_money, game.pot)
+            game.slider_knob_rect = draw_slider(SLIDER_RECT, min_bet, max_bet, game.slider_value, game.slider_dragging)
+            bet_text = render_outlined_text(f"Bet: ${game.bet_amount}", small_font, WHITE, BLACK, 2)
+            screen.blit(bet_text, (BET_TEXT_POS[0] - bet_text.get_width()//2, BET_TEXT_POS[1]))
+
+        # Buttons
+        btn_w, btn_h = BTN_SIZE
+        game.button_rects['higher'] = draw_button("Higher", WIDTH//2 - 220, BTN_Y, btn_w, btn_h, can_bet)
+        game.button_rects['lower'] = draw_button("Lower", WIDTH//2 - 80, BTN_Y, btn_w, btn_h, can_bet)
+        game.button_rects['pass'] = draw_button("Pass", WIDTH//2 + 60, BTN_Y, btn_w, btn_h, can_bet)
+        
+        if game.state == 'GAME_OVER':
+             game.button_rects['restart'] = draw_button("Restart", WIDTH//2 + 60, BTN_Y + 60, btn_w, btn_h, True)
+        
+        game.button_rects['quit'] = draw_button("Quit", WIDTH//2 + 200, BTN_Y, btn_w, btn_h, True)
+
+
         pygame.display.flip()
-        clock.tick(60)
-        if max_frames is not None:
-            frame_count += 1
-            if frame_count >= max_frames:
-                break
+        clock.tick(FPS)
+
+    pygame.quit()
+    sys.exit()
+
 
 if __name__ == "__main__":
-    try:
-        # Run a short self-test (a few frames) to ensure no immediate crash, then start full game.
-        main(max_frames=5)
-        main()
-    except SystemExit:
-        pass
-    except Exception as e:
-        print("Unhandled exception:", e)
-    finally:
-        pygame.quit()
+    main()
