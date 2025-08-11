@@ -107,7 +107,7 @@ Game/
 
 ## Screenshots
 
-*The game features a green felt background with clearly visible cards, outlined text messages, and intuitive button controls at the bottom of the screen.*
+![PyPoker Game Screenshot](pypoker.png)
 
 ## Contributing
 
